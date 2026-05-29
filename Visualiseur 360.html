@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Visualiseur 360°</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  /* ============================================================
+     CONFIGURATION — deux séries d'images (voir SERIES dans le script).
+       • Toiture          : toit/toiture360_0000.webp … _0099.webp
+       • Rez-de-chaussée  : rdc/rdc_0000.webp          … _0099.webp
+     ============================================================ */
+  :root{
+    --bg: #EEEDE8;
+    --bg-2: #F5F4F0;
+    --ink: #26251F;
+    --muted: #8C887E;
+    --line: rgba(38,37,31,0.12);
+    --line-strong: rgba(38,37,31,0.22);
+    --card: #FBFAF7;
+    --accent: #B26143;          /* terracotta, écho des tuiles */
+    --shadow-soft: 0 6px 20px -10px rgba(38,37,31,0.3);
+    --ease: cubic-bezier(.22,.61,.36,1);
+    font-family: 'Schibsted Grotesk', system-ui, -apple-system, sans-serif;
+  }
+
+  *{ box-sizing: border-box; margin:0; padding:0; }
+  html,body{ height:100%; }
+  body{
+    background: var(--bg);
+    color: var(--ink);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- Scène ---------- */
+  .stage{
+    position: fixed; inset: 0;
+    display: grid; place-items: center;
+    background:
+      radial-gradient(120% 90% at 50% 18%, var(--bg-2) 0%, var(--bg) 62%);
+    touch-action: none;
+    overflow: hidden;
+  }
+
+  .card{
+    background: #ffffff;
+    padding: clamp(16px, 2.6vw, 40px);
+    border-radius: 20px;
+    box-shadow: 0 30px 70px -32px rgba(38,37,31,0.45), 0 2px 10px -4px rgba(38,37,31,0.18);
+    width: min(88vw, 150vh);
+  }
+
+  .viewer{
+    position: relative;
+    width: 100%;
+    aspect-ratio: 2000 / 1125;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: grab;
+  }
+  .viewer.dragging{ cursor: grabbing; }
+
+  .frame{
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: contain;
+    -webkit-user-drag: none;
+    pointer-events: none;
+    display: block;
+    border-radius: 6px;
+  }
+
+  /* ---------- Flèches ---------- */
+  .nav{
+    position: absolute; top: 50%; transform: translateY(-50%);
+    z-index: 6;
+    width: 54px; height: 54px;
+    display: grid; place-items: center;
+    border: 1px solid var(--line);
+    background: rgba(251,250,247,0.78);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-radius: 50%;
+    color: var(--ink);
+    cursor: pointer;
+    box-shadow: var(--shadow-soft);
+    transition: transform .25s var(--ease), background .2s, border-color .2s, opacity .3s;
+  }
+  .nav:hover{ background: var(--card); border-color: var(--line-strong); }
+  .nav:active{ transform: translateY(-50%) scale(.92); }
+  .nav svg{ width: 22px; height: 22px; }
+  .nav.prev{ left: clamp(8px, 3vw, 38px); }
+  .nav.next{ right: clamp(8px, 3vw, 38px); }
+
+  /* ---------- Indice de glisser ---------- */
+  .hint{
+    position: absolute; left: 50%; bottom: 16%;
+    transform: translateX(-50%);
+    z-index: 6;
+    display: flex; align-items: center; gap: 9px;
+    padding: 9px 16px;
+    background: rgba(38,37,31,0.82);
+    color: #F5F4F0;
+    border-radius: 999px;
+    font-size: 13px; font-weight: 500; letter-spacing: .01em;
+    box-shadow: var(--shadow-soft);
+    transition: opacity .5s var(--ease), transform .5s var(--ease);
+    white-space: nowrap;
+  }
+  .hint.hide{ opacity:0; transform: translateX(-50%) translateY(8px); pointer-events:none; }
+  .hint svg{ width: 18px; height: 18px; }
+  .hint .swipe{ animation: swipe 1.8s var(--ease) infinite; }
+  @keyframes swipe{
+    0%,100%{ transform: translateX(-3px); opacity:.55; }
+    50%{ transform: translateX(3px); opacity:1; }
+  }
+
+  /* ---------- Sélecteur de série ---------- */
+  .series{
+    position: fixed; top: 22px; left: 50%; transform: translateX(-50%);
+    z-index: 20;
+    display: flex; gap: 4px;
+    padding: 4px;
+    background: rgba(251,250,247,0.86);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    box-shadow: var(--shadow-soft);
+  }
+  .series button{
+    appearance: none; border: none; cursor: pointer;
+    padding: 9px 18px;
+    border-radius: 999px;
+    font-family: inherit; font-size: 13.5px; font-weight: 600; letter-spacing: .01em;
+    color: var(--muted); background: transparent;
+    transition: color .2s, background .25s var(--ease);
+    white-space: nowrap;
+  }
+  .series button:hover{ color: var(--ink); }
+  .series button.active{ background: var(--ink); color: #F5F4F0; }
+
+  /* ---------- Bas : compteur + progression ---------- */
+  .hud{
+    position: fixed; left: 50%; bottom: 30px;
+    transform: translateX(-50%);
+    z-index: 6;
+    display: flex; flex-direction: column; align-items: center; gap: 12px;
+    width: min(420px, 70vw);
+  }
+  .counter{
+    font-variant-numeric: tabular-nums;
+    font-weight: 600; font-size: 14px; letter-spacing: .08em;
+    color: var(--muted);
+  }
+  .counter b{ color: var(--ink); font-weight: 700; }
+  .progress{
+    position: relative;
+    width: 100%; height: 3px;
+    background: var(--line);
+    border-radius: 999px;
+    overflow: hidden;
+  }
+  .progress span{
+    position:absolute; left:0; top:0; height:100%;
+    width: 0%;
+    background: var(--accent);
+    border-radius: 999px;
+  }
+
+  .brand{
+    position: fixed; top: 26px; left: 26px; z-index: 6;
+    font-size: 13px; font-weight: 600; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--muted);
+    pointer-events: none;
+  }
+
+  /* ---------- Chargement ---------- */
+  .loader{
+    position: fixed; inset:0; z-index: 60;
+    background: var(--bg);
+    display:flex; flex-direction:column; align-items:center; justify-content:center; gap: 22px;
+    transition: opacity .5s var(--ease);
+  }
+  .loader.hide{ opacity:0; pointer-events:none; }
+  .loader .lbl{ font-size:13px; letter-spacing:.16em; text-transform:uppercase; color:var(--muted); font-weight:600; }
+  .loader .bar{ width: min(280px, 60vw); height:3px; background: var(--line); border-radius:999px; overflow:hidden; }
+  .loader .bar span{ display:block; height:100%; width:0%; background: var(--accent); border-radius:999px; transition: width .15s linear; }
+  .loader .pct{ font-variant-numeric: tabular-nums; font-size: 30px; font-weight:700; letter-spacing:-.02em; }
+  .spin{ animation: spin 9s linear infinite; }
+  @keyframes spin{ to{ transform: rotate(360deg); } }
+
+  @media (max-width: 640px){
+    .hud{ bottom: 22px; }
+    .nav{ width:46px; height:46px; }
+    .brand{ display:none; }
+    .series button{ padding: 8px 14px; font-size: 12.5px; }
+  }
+</style>
+</head>
+<body>
+
+  <div class="stage" id="stage">
+    <div class="card">
+    <div class="viewer" id="viewer">
+      <img class="frame" id="frame" alt="Vue du bâtiment" draggable="false">
+
+      <button class="nav prev" id="prev" aria-label="Image précédente">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <button class="nav next" id="next" aria-label="Image suivante">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+      </button>
+
+      <div class="hint" id="hint">
+        <svg class="swipe" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 12h8M8 12l3-3M8 12l3 3M16 12l-3-3M16 12l-3 3"/></svg>
+        Glissez pour pivoter
+      </div>
+    </div>
+    </div>
+
+    <div class="brand">Étages&nbsp;360</div>
+
+    <div class="series" id="series">
+      <button data-key="toiture" class="active">Toiture</button>
+      <button data-key="rdc">Rez-de-chaussée</button>
+    </div>
+
+    <div class="hud">
+      <div class="counter" id="counter"><b>01</b> <span style="opacity:.5">/</span> 100</div>
+      <div class="progress" id="progressWrap"><span id="progressBar"></span></div>
+    </div>
+  </div>
+
+  <!-- Chargement -->
+  <div class="loader" id="loader">
+    <svg class="spin" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#B26143" stroke-width="1.6" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.5" opacity=".9"/></svg>
+    <div class="pct" id="loadPct">0%</div>
+    <div class="bar"><span id="loadBar"></span></div>
+    <div class="lbl" id="loadLbl">Chargement des vues</div>
+  </div>
+
+<script>
+/* =============================================================
+   Visualiseur 360° — plusieurs séries d'images orbitales
+   ============================================================= */
+const COMMON = { pad: 4, start: 0, count: 100, ext: 'webp' };
+const SERIES = [
+  { key:'toiture', label:'Toiture',         folder:'toit/', prefix:'toiture360_' },
+  { key:'rdc',     label:'Rez-de-chaussée', folder:'rdc/',  prefix:'rdc_' },
+];
+const COUNT = COMMON.count;
+
+/* Comportement (valeurs fixes) */
+const AUTOSPEED = 0.10;   // vitesse d'auto-rotation (images / frame)
+const SENS      = 0.24;   // sensibilité du glisser (images / pixel)
+
+const LS = 'etages360';
+const $ = id => document.getElementById(id);
+
+/* Stock par série */
+const store = {};
+SERIES.forEach(s => store[s.key] = { images: new Array(COUNT), loaded:false, loading:false });
+
+let currentKey = SERIES[0].key;
+try { const k = localStorage.getItem(LS+'.series'); if (k && store[k]) currentKey = k; } catch(e){}
+
+let position = 0;            // position flottante (sur 0..count), partagée entre les séries
+let dragging = false;
+let autoStopped = false;
+let lastIndex = -1;
+let loopStarted = false;
+try { const f = parseFloat(localStorage.getItem(LS+'.frame')); if(!isNaN(f)) position = f; } catch(e){}
+
+const frameEl = $('frame');
+
+/* ---------- Sources ---------- */
+function srcFor(key, i){
+  const s = SERIES.find(x => x.key === key);
+  const n = String(COMMON.start + i).padStart(COMMON.pad, '0');
+  return `${s.folder}${s.prefix}${n}.${COMMON.ext}`;
+}
+
+/* ---------- Chargement d'une série ---------- */
+function showLoader(){ $('loader').classList.remove('hide'); $('loadBar').style.width='0%'; $('loadPct').textContent='0%'; }
+function hideLoader(){ $('loader').classList.add('hide'); }
+
+function loadSeries(key, then){
+  const s = store[key];
+  if (s.loaded){ then && then(); return; }
+  if (s.loading) return;
+  s.loading = true;
+  showLoader();
+  $('loadLbl').textContent = 'Chargement — ' + SERIES.find(x=>x.key===key).label;
+  let done = 0;
+  const tick = () => {
+    const p = Math.round(done / COUNT * 100);
+    $('loadPct').textContent = p + '%';
+    $('loadBar').style.width = p + '%';
+    if (done >= COUNT){
+      s.loaded = true; s.loading = false;
+      then && then();
+    }
+  };
+  for (let i = 0; i < COUNT; i++){
+    const img = new Image();
+    img.onload = () => { done++; tick(); };
+    img.onerror = () => { done++; tick(); };
+    img.src = srcFor(key, i);
+    s.images[i] = img;
+  }
+}
+
+/* ---------- Rendu ---------- */
+function wrap(v){ return ((v % COUNT) + COUNT) % COUNT; }
+function currentIndex(){ return wrap(Math.round(position)); }
+
+function render(force){
+  const idx = currentIndex();
+  if (idx !== lastIndex || force){
+    lastIndex = idx;
+    const img = store[currentKey].images[idx];
+    if (img) frameEl.src = img.src;
+    $('counter').innerHTML = `<b>${String(idx+1).padStart(2,'0')}</b> <span style="opacity:.5">/</span> ${COUNT}`;
+    $('progressBar').style.width = (idx / (COUNT - 1) * 100) + '%';
+    localStorage.setItem(LS+'.frame', position.toFixed(2));
+  }
+}
+
+/* ---------- Boucle d'animation (auto-rotation, sans inertie) ---------- */
+function loop(){
+  if (!autoStopped && !dragging){
+    position = wrap(position + AUTOSPEED);
+  }
+  render(false);
+  requestAnimationFrame(loop);
+}
+
+/* ---------- Sélecteur de série ---------- */
+function updateSeriesButtons(){
+  document.querySelectorAll('.series button').forEach(b =>
+    b.classList.toggle('active', b.dataset.key === currentKey));
+}
+function switchSeries(key){
+  if (key === currentKey && store[key].loaded) return;
+  loadSeries(key, () => {
+    currentKey = key;
+    localStorage.setItem(LS+'.series', key);
+    updateSeriesButtons();
+    hideLoader();
+    render(true);
+  });
+}
+document.querySelectorAll('.series button').forEach(b => {
+  b.addEventListener('click', () => switchSeries(b.dataset.key));
+});
+
+/* ---------- Interaction glisser ---------- */
+const viewer = $('viewer');
+let lastX = 0;
+function stopAuto(){ autoStopped = true; }
+
+viewer.addEventListener('pointerdown', e => {
+  if (e.target.closest('.nav')) return;
+  dragging = true; stopAuto();
+  lastX = e.clientX;
+  viewer.classList.add('dragging');
+  viewer.setPointerCapture(e.pointerId);
+  hideHint();
+});
+viewer.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  const dx = e.clientX - lastX;
+  lastX = e.clientX;
+  position = wrap(position - dx * SENS);
+  render(false);
+});
+function endDrag(e){
+  if (!dragging) return;
+  dragging = false;
+  viewer.classList.remove('dragging');
+  try { viewer.releasePointerCapture(e.pointerId); } catch(_){}
+}
+viewer.addEventListener('pointerup', endDrag);
+viewer.addEventListener('pointercancel', endDrag);
+
+/* ---------- Flèches (clic + maintien) ---------- */
+function step(dir){
+  stopAuto();
+  position = wrap(Math.round(position) + dir);
+  render(false);
+  hideHint();
+}
+function holdable(btn, dir){
+  let t1, t2;
+  const start = e => {
+    e.preventDefault();
+    step(dir);
+    t1 = setTimeout(() => { t2 = setInterval(() => step(dir), 90); }, 320);
+  };
+  const stop = () => { clearTimeout(t1); clearInterval(t2); };
+  btn.addEventListener('pointerdown', start);
+  btn.addEventListener('pointerup', stop);
+  btn.addEventListener('pointerleave', stop);
+  btn.addEventListener('pointercancel', stop);
+}
+holdable($('prev'), -1);
+holdable($('next'), +1);
+
+/* ---------- Clavier (bonus) ---------- */
+window.addEventListener('keydown', e => {
+  if (e.key === 'ArrowLeft') step(-1);
+  else if (e.key === 'ArrowRight') step(+1);
+});
+
+/* ---------- Indice ---------- */
+let hintHidden = false;
+function hideHint(){
+  if (hintHidden) return;
+  hintHidden = true;
+  $('hint').classList.add('hide');
+}
+
+/* ---------- Démarrage ---------- */
+updateSeriesButtons();
+loadSeries(currentKey, () => {
+  hideLoader();
+  render(true);
+  if (!loopStarted){ loopStarted = true; loop(); }
+});
+</script>
+</body>
+</html>
